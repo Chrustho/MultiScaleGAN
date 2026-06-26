@@ -1,4 +1,4 @@
-# Tesi triennale — GAN per super-resolution audio
+# Tesi triennale - GAN per audio super resolution
 
 A una rete generatrice (codice di un altro tesista) è stato aggiunto un
 discriminatore multi-scala per costruire una GAN che ricostruisce il contenuto in

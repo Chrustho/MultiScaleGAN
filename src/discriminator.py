@@ -1,13 +1,4 @@
-"""Discriminatore multi-scala per la GAN di super-resolution audio.
-
-Versione CORRETTA della cella 32 del notebook originale. Correzioni:
-  * BatchNorm2d -> InstanceNorm2d: la BatchNorm accoppia i campioni del batch ed
-    è incompatibile con la gradient penalty (WGAN-GP); la normalizzazione
-    per-campione la rende corretta (vedi REVIEW.md);
-  * ``final_conv`` ora usa spectral_norm come tutti gli altri layer (uniformità);
-  * rimosso il parametro ``freq_bins`` inutilizzato in ``SubDiscriminator``.
-La logica multi-scala (downsample + ricomposizione complessa) è invariata.
-"""
+"""Discriminatore multi-scala per la GAN di super-resolution audio."""
 
 import torch
 import torch.nn as nn
@@ -33,22 +24,84 @@ class SubDiscriminator(nn.Module):
             return nn.utils.spectral_norm(layer) if use_spectral_norm else layer
 
         # Encoder per parte reale
-        self.real_conv1 = norm_layer(nn.Conv2d(1, channels[0], kernel_size=(7, 5), stride=(2, 2), padding=(3, 2)))
-        self.real_conv2 = norm_layer(nn.Conv2d(channels[0], channels[1], kernel_size=(5, 3), stride=(2, 2), padding=(2, 1)))
-        self.real_conv3 = norm_layer(nn.Conv2d(channels[1], channels[2], kernel_size=(3, 3), stride=(2, 1), padding=(1, 1)))
-        self.real_conv4 = norm_layer(nn.Conv2d(channels[2], channels[3], kernel_size=(3, 3), stride=(2, 1), padding=(1, 1)))
+        self.real_conv1 = norm_layer(
+            nn.Conv2d(1, channels[0], kernel_size=(7, 5), stride=(2, 2), padding=(3, 2))
+        )
+        self.real_conv2 = norm_layer(
+            nn.Conv2d(
+                channels[0],
+                channels[1],
+                kernel_size=(5, 3),
+                stride=(2, 2),
+                padding=(2, 1),
+            )
+        )
+        self.real_conv3 = norm_layer(
+            nn.Conv2d(
+                channels[1],
+                channels[2],
+                kernel_size=(3, 3),
+                stride=(2, 1),
+                padding=(1, 1),
+            )
+        )
+        self.real_conv4 = norm_layer(
+            nn.Conv2d(
+                channels[2],
+                channels[3],
+                kernel_size=(3, 3),
+                stride=(2, 1),
+                padding=(1, 1),
+            )
+        )
 
         # Encoder per parte immaginaria
-        self.imag_conv1 = norm_layer(nn.Conv2d(1, channels[0], kernel_size=(7, 5), stride=(2, 2), padding=(3, 2)))
-        self.imag_conv2 = norm_layer(nn.Conv2d(channels[0], channels[1], kernel_size=(5, 3), stride=(2, 2), padding=(2, 1)))
-        self.imag_conv3 = norm_layer(nn.Conv2d(channels[1], channels[2], kernel_size=(3, 3), stride=(2, 1), padding=(1, 1)))
-        self.imag_conv4 = norm_layer(nn.Conv2d(channels[2], channels[3], kernel_size=(3, 3), stride=(2, 1), padding=(1, 1)))
+        self.imag_conv1 = norm_layer(
+            nn.Conv2d(1, channels[0], kernel_size=(7, 5), stride=(2, 2), padding=(3, 2))
+        )
+        self.imag_conv2 = norm_layer(
+            nn.Conv2d(
+                channels[0],
+                channels[1],
+                kernel_size=(5, 3),
+                stride=(2, 2),
+                padding=(2, 1),
+            )
+        )
+        self.imag_conv3 = norm_layer(
+            nn.Conv2d(
+                channels[1],
+                channels[2],
+                kernel_size=(3, 3),
+                stride=(2, 1),
+                padding=(1, 1),
+            )
+        )
+        self.imag_conv4 = norm_layer(
+            nn.Conv2d(
+                channels[2],
+                channels[3],
+                kernel_size=(3, 3),
+                stride=(2, 1),
+                padding=(1, 1),
+            )
+        )
 
         # Fusione delle feature reali e immaginarie
-        self.fusion_conv = norm_layer(nn.Conv2d(channels[3] * 2, channels[4], kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)))
+        self.fusion_conv = norm_layer(
+            nn.Conv2d(
+                channels[3] * 2,
+                channels[4],
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(1, 1),
+            )
+        )
 
         # Layer finale per il punteggio di discriminazione
-        self.final_conv = norm_layer(nn.Conv2d(channels[4], 1, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)))
+        self.final_conv = norm_layer(
+            nn.Conv2d(channels[4], 1, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        )
 
         # Normalizzazione per-campione (compatibile con la gradient penalty)
         self.norm1 = nn.InstanceNorm2d(channels[0], affine=True)
@@ -90,7 +143,7 @@ class SubDiscriminator(nn.Module):
         fused = F.leaky_relu(self.norm_fusion(self.fusion_conv(combined)), 0.2)
         output = self.final_conv(fused)
 
-        # Feature intermedie per la feature matching loss (usata dal generatore)
+        # Feature intermedie per la feature matching loss
         return output, [r1, r2, r3, r4, i1, i2, i3, i4, fused]
 
 
@@ -104,8 +157,10 @@ class MultiScaleDiscriminator(nn.Module):
 
         self.discriminators = nn.ModuleList()
         for i in range(num_scales):
-            channels_mult = 2 ** i
-            self.discriminators.append(SubDiscriminator(channels_mult, use_spectral_norm))
+            channels_mult = 2**i
+            self.discriminators.append(
+                SubDiscriminator(channels_mult, use_spectral_norm)
+            )
 
         # Downsampling temporale tra le scale
         self.downsample = nn.AvgPool2d(kernel_size=(2, 1), stride=(2, 1))
@@ -123,10 +178,14 @@ class MultiScaleDiscriminator(nn.Module):
 
             # Downsample per la scala successiva (tranne l'ultima)
             if i < self.num_scales - 1:
-                real = current_input.real.transpose(1, 2).unsqueeze(1)  # [batch, 1, time, freq]
+                real = current_input.real.transpose(1, 2).unsqueeze(
+                    1
+                )  # [batch, 1, time, freq]
                 imag = current_input.imag.transpose(1, 2).unsqueeze(1)
 
-                real = self.downsample(real).squeeze(1).transpose(1, 2)  # -> [batch, freq, time]
+                real = (
+                    self.downsample(real).squeeze(1).transpose(1, 2)
+                )  # [batch, freq, time]
                 imag = self.downsample(imag).squeeze(1).transpose(1, 2)
 
                 current_input = torch.complex(real, imag)

@@ -1,14 +1,4 @@
-"""Preprocessing del dataset FMA: split, forme d'onda e STFT.
-
-Versione CORRETTA delle celle 13, 15, 19, 21 del notebook originale.
-Correzioni principali rispetto all'originale:
-  * path centralizzati in ``config`` (niente più mix /kaggle//content/../temp);
-  * ``save_on_drive`` solleva un errore su split sconosciuti (prima: NameError);
-  * finestra STFT unica (``config.WINDOW`` = 'hann') coerente col dataset;
-  * accoppiamento wave<->STFT tramite nomi ordinati (``paired_wave_stft_paths``),
-    risolve il disallineamento da ``os.listdir`` non ordinato;
-  * rimossi i print di debug massivi e le variabili inutilizzate; shuffle con seed.
-"""
+"""Preprocessing del dataset FMA: split, forme d'onda e STFT"""
 
 import os
 import pickle
@@ -23,7 +13,6 @@ from . import config
 
 
 def save_on_drive(data_list, split, dir_name):
-    """Serializza ogni elemento di ``data_list`` come file .mus nello split scelto."""
     path = config.split_dir(split)  # solleva ValueError se split non valido
     os.makedirs(path, exist_ok=True)
 
@@ -71,8 +60,8 @@ def build_dataset_splits(num_cart=30, min_songs=10, seed=config.SEED):
 
         data_array = np.asarray(data_list)
         train = data_array[indexes[:train_len]]
-        test = data_array[indexes[train_len:train_len + test_len]]
-        validation = data_array[indexes[train_len + test_len:]]
+        test = data_array[indexes[train_len : train_len + test_len]]
+        validation = data_array[indexes[train_len + test_len :]]
 
         save_on_drive(train, "train", str(entry))
         save_on_drive(test, "test", str(entry))
@@ -136,11 +125,7 @@ def extract_stfts(src_dir=None):
 
 
 def paired_wave_stft_paths(wave_dir=None, stft_dir=None):
-    """Restituisce due liste (wave, stft) ALLINEATE per nome file.
-
-    Risolve il bug dell'originale (cella 25) che accoppiava per indice gli output
-    di ``os.listdir``, il cui ordine non è garantito.
-    """
+    """Restituisce due liste (wave, stft) allineate per nome file."""
     wave_dir = wave_dir or config.WAVE_DIR
     stft_dir = stft_dir or config.STFT_DIR
 
@@ -154,7 +139,7 @@ def paired_wave_stft_paths(wave_dir=None, stft_dir=None):
 
 
 def _extract_waveform(loaded):
-    """Estrae il vettore audio da un oggetto .mus (tuple o ndarray)."""
+    """Estrae il vettore audio da un oggetto .mus ."""
     if isinstance(loaded, tuple) and len(loaded) >= 1:
         return loaded[0]
     if isinstance(loaded, np.ndarray):

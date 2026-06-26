@@ -1,25 +1,24 @@
 """Dataset e utility audio/STFT.
 
-CODICE DELL'ALTRO TESISTA — copiato VERBATIM dalla cella 23 del notebook
-originale. Non modificato: eventuali problemi sono documentati in REVIEW.md.
-(Solo l'header di import è stato reso esplicito per usarlo come modulo.)
+CODICE DELL'ALTRO TESISTA
 """
 
-from tqdm import tqdm
-import pickle
 import os
+import pickle
+
+import IPython.display as ipd
 import librosa
 import librosa.display
-import IPython.display as ipd
-import numpy as np
 import matplotlib.pyplot as plt
-from scipy import signal
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from scipy.signal import butter, lfilter, freqz
+from scipy import signal
+from scipy.signal import butter, freqz, lfilter
+from tqdm import tqdm
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Parametri globali
 sample_rate = 22050  # sample rate degli audio
@@ -28,14 +27,17 @@ max_len_wave = 661560
 stride = 1024
 window_size = 4096
 
+
 def butter_lowpass(cutoff, fs, order=2):
-    return butter(order, cutoff, fs=fs, btype='low', analog=False)
+    return butter(order, cutoff, fs=fs, btype="low", analog=False)
+
 
 def butter_lowpass_filter(data, cutoff, fs, order=2):
     b, a = butter_lowpass(cutoff, fs, order=order)
     y = lfilter(b, a, data)
-    #print(y.size())
+    # print(y.size())
     return y
+
 
 def remove_window(audio_windowed):
     n_frames = audio_windowed.shape[0]
@@ -55,12 +57,17 @@ def remove_window(audio_windowed):
             overlap_end = min(start + stride, 661500)
 
             if overlap_end > overlap_start:
-                out[overlap_start:overlap_end] = (out[overlap_start:overlap_end] +
-                                                   audio_windowed[i][:overlap_end-overlap_start]) / 2
+                out[overlap_start:overlap_end] = (
+                    out[overlap_start:overlap_end]
+                    + audio_windowed[i][: overlap_end - overlap_start]
+                ) / 2
             if overlap_end < end:
-                out[overlap_end:end] = audio_windowed[i][overlap_end-start:window_len]
+                out[overlap_end:end] = audio_windowed[i][
+                    overlap_end - start : window_len
+                ]
 
     return out
+
 
 def frame_audio(audio, frame_len=4096, hop=1024):
     n_frames = 1 + (len(audio) - frame_len) // hop
@@ -72,12 +79,10 @@ def frame_audio(audio, frame_len=4096, hop=1024):
     return frames
 
 
-# ============== DATASET ==============
-
 class AudioSTFTDataset(torch.utils.data.Dataset):
     def __init__(self, audio_paths, stft_paths):
         """
-        Dataset che gestisce correttamente audio e STFT.
+        Dataset che gestisce audio e STFT.
 
         Args:
             audio_paths (list): Lista dei path delle tracce audio (.npy files).
@@ -100,7 +105,9 @@ class AudioSTFTDataset(torch.utils.data.Dataset):
         if len(self.valid_indices) == 0:
             raise ValueError("Nessun file valido trovato nei path specificati!")
 
-        print(f"Dataset inizializzato con {len(self.valid_indices)} file validi su {len(audio_paths)} totali")
+        print(
+            f"Dataset inizializzato con {len(self.valid_indices)} file validi su {len(audio_paths)} totali"
+        )
 
     def __len__(self):
         return len(self.valid_indices)
@@ -112,15 +119,17 @@ class AudioSTFTDataset(torch.utils.data.Dataset):
             raw_audio = np.load(self.audio_paths[real_idx])
         except Exception as e:
             print(f"Errore nel caricare {self.audio_paths[real_idx]}: {e}")
-            return (torch.zeros(1, window_size),
-                    torch.zeros(2049, 1, dtype=torch.complex64),
-                    torch.zeros(2049, 1, dtype=torch.complex64),
-                    np.zeros(661500))
+            return (
+                torch.zeros(1, window_size),
+                torch.zeros(2049, 1, dtype=torch.complex64),
+                torch.zeros(2049, 1, dtype=torch.complex64),
+                np.zeros(661500),
+            )
 
         if len(raw_audio) > 661500:
             raw_audio = raw_audio[:661500]
         elif len(raw_audio) < 661500:
-            raw_audio = np.pad(raw_audio, (0, 661500 - len(raw_audio)), mode='constant')
+            raw_audio = np.pad(raw_audio, (0, 661500 - len(raw_audio)), mode="constant")
 
         filtered_audio = butter_lowpass_filter(raw_audio, cutoff, sample_rate, order=2)
 
@@ -131,17 +140,11 @@ class AudioSTFTDataset(torch.utils.data.Dataset):
         except Exception as e:
             print(f"Errore nel caricare STFT {self.stft_paths[real_idx]}: {e}")
             stft_gt = librosa.stft(
-                raw_audio,
-                n_fft=4096,
-                win_length=4096,
-                window='hann'
+                raw_audio, n_fft=4096, win_length=4096, window="hann"
             )
 
         stft_train = librosa.stft(
-            filtered_audio,
-            n_fft=4096,
-            win_length=4096,
-            window='hann'
+            filtered_audio, n_fft=4096, win_length=4096, window="hann"
         )
 
         audio_tensor = torch.tensor(audio_windowed.astype(np.float32))

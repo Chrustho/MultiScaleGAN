@@ -5,12 +5,9 @@
 fma_small/
 input
 
-# Checkpoint e storico training
 *.pt
 training_history.npz
 
-# Notebook originale con output di debug (~300 KB): si usa notebook_originale.ipynb
-notebook8324482692(2).ipynb
 
 # Python
 __pycache__/

@@ -1,20 +1,4 @@
-"""Addestramento della GAN (generatore altro tesista + discriminatore multi-scala).
-
-Versione CORRETTA e rifattorizzata della cella 34 del notebook originale.
-Correzioni principali rispetto all'originale:
-  * gli scaler AMP sono creati PRIMA del caricamento del checkpoint (prima:
-    NameError perché ``scaler_g``/``scaler_d`` erano usati prima della definizione);
-  * il discriminatore è addestrato in fp32 (niente autocast/GradScaler): la
-    gradient penalty fa un double-backward incompatibile con GradScaler;
-  * la feature matching loss è applicata al GENERATORE (prima era erroneamente
-    sommata alla loss del discriminatore);
-  * ``del fake_stft_g`` protetta nel ramo senza discriminatore;
-  * confronto corretto ``device.type == 'cuda'`` (prima ``device == 'cuda'`` sempre
-    falso su torch.device);
-  * step di D coerente (zero_grad/backward/clip/step) senza accumulazione muddled;
-  * dati assunti in formato [B, freq_bins, time] (BFT), rimossi i rami morti BTF;
-  * rimossa la doppia definizione di ``history`` e la CombinedLoss duplicata.
-"""
+"""Addestramento della GAN."""
 
 import gc
 import os
@@ -22,8 +6,8 @@ import os
 import torch
 
 from . import config
-from .generator import ReteRecWithAttention
 from .discriminator import MultiScaleDiscriminator
+from .generator import ReteRecWithAttention
 from .losses import (
     CombinedLoss,
     DiscriminatorLoss,
@@ -31,10 +15,6 @@ from .losses import (
     generator_adv_loss,
 )
 
-# NB: dataset/preprocessing importano librosa/scipy (pesanti) e numpy; vengono
-# importati lazy dentro main() così le funzioni di step restano leggere (solo torch).
-
-# ===================== IPERPARAMETRI =====================
 BATCH_SIZE = 2
 ACCUMULATION_STEPS = 3
 EPOCHS = 30
@@ -42,11 +22,11 @@ EPOCHS = 30
 LR_G = 2e-3
 LR_D = 2e-3 * 0.3
 
-ALPHA = 0.5         # peso MSE nella loss di ricostruzione
-BETA = 0.9          # peso coerenza spettrale
-ADV_WEIGHT = 0.7    # peso loss avversaria del generatore
-LAMBDA_FEAT = 1.0   # peso feature matching (sul generatore)
-LAMBDA_GP = 0.4     # peso gradient penalty (sul discriminatore)
+ALPHA = 0.5  # peso MSE nella loss di ricostruzione
+BETA = 0.9  # peso coerenza spettrale
+ADV_WEIGHT = 0.7  # peso loss avversaria del generatore
+LAMBDA_FEAT = 1.0  # peso feature matching (sul generatore)
+LAMBDA_GP = 0.4  # peso gradient penalty (sul discriminatore)
 
 D_STEPS = 2
 D_WARMUP_EPOCHS = 3
@@ -79,14 +59,15 @@ def move_optimizer_state_to_device(opt, device):
 
 
 def clear_gpu_memory(device):
-    """Libera memoria GPU e stampa lo stato (no-op informativo su CPU)."""
     if device.type == "cuda":
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
         gc.collect()
         total = torch.cuda.get_device_properties(0).total_memory / 1e9
         allocated = torch.cuda.memory_allocated() / 1e9
-        print(f"Stato memoria GPU: Totale {total:.2f}GB, Allocata {allocated:.2f}GB, Libera {total - allocated:.2f}GB")
+        print(
+            f"Stato memoria GPU: Totale {total:.2f}GB, Allocata {allocated:.2f}GB, Libera {total - allocated:.2f}GB"
+        )
     else:
         gc.collect()
         print("Esecuzione su CPU: memoria CUDA non disponibile.")
@@ -94,7 +75,9 @@ def clear_gpu_memory(device):
 
 def _to_generator_input(stft_complex):
     """Da STFT complessa [B, F, T] alle parti (real, imag) in [B, T, F] per il generatore."""
-    return stft_complex.real.permute(0, 2, 1).contiguous(), stft_complex.imag.permute(0, 2, 1).contiguous()
+    return stft_complex.real.permute(0, 2, 1).contiguous(), stft_complex.imag.permute(
+        0, 2, 1
+    ).contiguous()
 
 
 def _to_discriminator_stft(real_btf, imag_btf):
@@ -124,8 +107,18 @@ def discriminator_step(D, G, opt_d, d_loss_fn, stft_in, stft_gt, device):
     return d_dict
 
 
-def generator_step(G, D, opt_g, g_loss_fn, scaler_g, stft_in, stft_gt, device,
-                   use_discriminator, do_optim_step):
+def generator_step(
+    G,
+    D,
+    opt_g,
+    g_loss_fn,
+    scaler_g,
+    stft_in,
+    stft_gt,
+    device,
+    use_discriminator,
+    do_optim_step,
+):
     """Forward+backward del generatore con accumulazione. Ritorna le statistiche di loss."""
     in_real, in_imag = _to_generator_input(stft_in)
     gt_real, gt_imag = _to_generator_input(stft_gt)  # [B, T, F]
@@ -133,21 +126,25 @@ def generator_step(G, D, opt_g, g_loss_fn, scaler_g, stft_in, stft_gt, device,
     if use_discriminator and D is not None:
         for p in D.parameters():
             p.requires_grad = False
-        D.eval()  # niente aggiornamento delle running stats durante il forward di G
+        D.eval()
 
     g_adv_val = 0.0
     g_feat_val = 0.0
     with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
         fake_real, fake_imag = G(in_real, in_imag)
 
-        # Allinea le shape in caso di mismatch (robustezza)
         if fake_real.shape != gt_real.shape:
             min_t = min(fake_real.shape[1], gt_real.shape[1])
             min_f = min(fake_real.shape[2], gt_real.shape[2])
-            fake_real, fake_imag = fake_real[:, :min_t, :min_f], fake_imag[:, :min_t, :min_f]
+            fake_real, fake_imag = (
+                fake_real[:, :min_t, :min_f],
+                fake_imag[:, :min_t, :min_f],
+            )
             gt_real, gt_imag = gt_real[:, :min_t, :min_f], gt_imag[:, :min_t, :min_f]
 
-        g_rec_total, g_mse, g_coherence = g_loss_fn(fake_real, fake_imag, gt_real, gt_imag)
+        g_rec_total, g_mse, g_coherence = g_loss_fn(
+            fake_real, fake_imag, gt_real, gt_imag
+        )
 
         if use_discriminator and D is not None:
             fake_stft_g = _to_discriminator_stft(fake_real, fake_imag)
@@ -161,7 +158,9 @@ def generator_step(G, D, opt_g, g_loss_fn, scaler_g, stft_in, stft_gt, device,
             g_feat = feature_matching_loss(real_feats, fake_feats_g)
             g_adv_val, g_feat_val = g_adv.detach().item(), g_feat.detach().item()
 
-            g_loss = (g_rec_total + ADV_WEIGHT * g_adv + LAMBDA_FEAT * g_feat) / ACCUMULATION_STEPS
+            g_loss = (
+                g_rec_total + ADV_WEIGHT * g_adv + LAMBDA_FEAT * g_feat
+            ) / ACCUMULATION_STEPS
         else:
             g_loss = g_rec_total / ACCUMULATION_STEPS
 
@@ -197,8 +196,12 @@ def generator_step(G, D, opt_g, g_loss_fn, scaler_g, stft_in, stft_gt, device,
 
 def _new_history():
     return {
-        "g_total_loss": [], "g_mse_loss": [], "g_coherence_loss": [], "g_adv_loss": [],
-        "d_total_loss": [], "d_adv_loss": [],
+        "g_total_loss": [],
+        "g_mse_loss": [],
+        "g_coherence_loss": [],
+        "g_adv_loss": [],
+        "d_total_loss": [],
+        "d_adv_loss": [],
     }
 
 
@@ -225,10 +228,12 @@ def main():
         except Exception:
             pass
 
-    # ---- Dataset ----
+    # Dataset
     audio_files, stft_files = paired_wave_stft_paths()
     if not audio_files:
-        raise ValueError(f"Nessun file accoppiato trovato in {config.WAVE_DIR} / {config.STFT_DIR}")
+        raise ValueError(
+            f"Nessun file accoppiato trovato in {config.WAVE_DIR} / {config.STFT_DIR}"
+        )
     print(f"Trovate {len(audio_files)} coppie audio/STFT")
 
     dataset = AudioSTFTDataset(audio_files, stft_files)
@@ -236,14 +241,20 @@ def main():
     train_size = int(0.8 * total)
     val_size = total - train_size
     gen = torch.Generator().manual_seed(42)
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size], generator=gen)
+    train_dataset, val_dataset = random_split(
+        dataset, [train_size, val_size], generator=gen
+    )
 
     pin = device.type == "cuda"
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=pin)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, pin_memory=pin)
+    train_loader = DataLoader(
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=pin
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=BATCH_SIZE, shuffle=False, pin_memory=pin
+    )
     print(f"Addestramento: {len(train_dataset)}, Validazione: {len(val_dataset)}")
 
-    # ---- Verifica formato dati: deve essere [B, freq_bins, time] (BFT) ----
+    # Verifica formato dati, deve essere [B, freq_bins, time] (BFT)
     _, stft_in, stft_gt, _ = next(iter(train_loader))
     if stft_in.shape[1] != config.FREQ_BINS:
         raise ValueError(
@@ -251,13 +262,17 @@ def main():
         )
     freq_bins = config.FREQ_BINS
 
-    # ---- Modelli ----
-    G = ReteRecWithAttention(window_size=config.WIN_LENGTH, freq_bins=freq_bins, hidden_size=128)
+    # Modelli
+    G = ReteRecWithAttention(
+        window_size=config.WIN_LENGTH, freq_bins=freq_bins, hidden_size=128
+    )
     print(f"Parametri generatore: {sum(p.numel() for p in G.parameters()):,}")
 
     D, opt_d, d_loss_fn = None, None, None
     if USE_DISCRIMINATOR:
-        D = MultiScaleDiscriminator(freq_bins=freq_bins, num_scales=3, use_spectral_norm=True)
+        D = MultiScaleDiscriminator(
+            freq_bins=freq_bins, num_scales=3, use_spectral_norm=True
+        )
         print(f"Parametri discriminatore: {sum(p.numel() for p in D.parameters()):,}")
         opt_d = torch.optim.Adam(D.parameters(), lr=LR_D, betas=(0.5, 0.999))
         d_loss_fn = DiscriminatorLoss(lambda_gp=LAMBDA_GP)
@@ -265,13 +280,12 @@ def main():
     opt_g = torch.optim.Adam(G.parameters(), lr=LR_G, betas=(0.5, 0.999))
     g_loss_fn = CombinedLoss(alpha=ALPHA, beta=BETA)
 
-    # AMP solo per il generatore (il discriminatore gira in fp32 per la gradient penalty)
     scaler_g = torch.amp.GradScaler("cuda") if device.type == "cuda" else None
 
     history = _new_history()
     start_epoch = 0
 
-    # ---- Checkpoint (creazione scaler già avvenuta: niente NameError) ----
+    # Checkpoint
     checkpoint_path = os.path.join(config.CHECKPOINT_DIR, "gan_checkpoint_resume.pt")
     if os.path.exists(checkpoint_path):
         print(f"Caricamento checkpoint da {checkpoint_path} ...")
@@ -315,7 +329,9 @@ def main():
         D.to(device)
 
     print("\n=== Avvio addestramento ===")
-    print(f"Batch size: {BATCH_SIZE}, Accumulation steps: {ACCUMULATION_STEPS} (effettivo {BATCH_SIZE * ACCUMULATION_STEPS})")
+    print(
+        f"Batch size: {BATCH_SIZE}, Accumulation steps: {ACCUMULATION_STEPS} (effettivo {BATCH_SIZE * ACCUMULATION_STEPS})"
+    )
     print(f"Uso discriminatore: {USE_DISCRIMINATOR}")
 
     for epoch in range(start_epoch, EPOCHS):
@@ -337,18 +353,28 @@ def main():
             stft_in = stft_in.to(device)
             stft_gt = stft_gt.to(device)
 
-            # ----- Discriminatore -----
+            # Discriminatore
             if USE_DISCRIMINATOR and D is not None:
                 for _ in range(d_steps):
-                    d_dict = discriminator_step(D, G, opt_d, d_loss_fn, stft_in, stft_gt, device)
+                    d_dict = discriminator_step(
+                        D, G, opt_d, d_loss_fn, stft_in, stft_gt, device
+                    )
                 epoch_d["total"] += d_dict["total"]
                 epoch_d["adv_loss"] += d_dict["adv_loss"]
 
-            # ----- Generatore -----
+            # Generatore
             do_step = (batch_idx + 1) % ACCUMULATION_STEPS == 0
             g_stats = generator_step(
-                G, D, opt_g, g_loss_fn, scaler_g, stft_in, stft_gt, device,
-                USE_DISCRIMINATOR, do_step,
+                G,
+                D,
+                opt_g,
+                g_loss_fn,
+                scaler_g,
+                stft_in,
+                stft_gt,
+                device,
+                USE_DISCRIMINATOR,
+                do_step,
             )
             for k in epoch_g:
                 epoch_g[k] += g_stats[k]
@@ -366,13 +392,17 @@ def main():
 
         n = max(1, len(train_loader))
         print(f"\n=== Riepilogo Epoca {epoch + 1} ===")
-        print(f"Generatore - Totale: {epoch_g['total'] / n:.4f}, MSE: {epoch_g['mse'] / n:.4f}, Coerenza: {epoch_g['coherence'] / n:.4f}")
+        print(
+            f"Generatore - Totale: {epoch_g['total'] / n:.4f}, MSE: {epoch_g['mse'] / n:.4f}, Coerenza: {epoch_g['coherence'] / n:.4f}"
+        )
         history["g_total_loss"].append(epoch_g["total"] / n)
         history["g_mse_loss"].append(epoch_g["mse"] / n)
         history["g_coherence_loss"].append(epoch_g["coherence"] / n)
         if USE_DISCRIMINATOR:
             print(f"Generatore - Avversario: {epoch_g['adv'] / n:.4f}")
-            print(f"Discriminatore - Totale: {epoch_d['total'] / n:.4f}, Adv: {epoch_d['adv_loss'] / n:.4f}")
+            print(
+                f"Discriminatore - Totale: {epoch_d['total'] / n:.4f}, Adv: {epoch_d['adv_loss'] / n:.4f}"
+            )
             history["g_adv_loss"].append(epoch_g["adv"] / n)
             history["d_total_loss"].append(epoch_d["total"] / n)
             history["d_adv_loss"].append(epoch_d["adv_loss"] / n)
@@ -405,18 +435,27 @@ def _run_validation(G, g_loss_fn, val_loader, device, max_batches=5):
             gt_real, gt_imag = _to_generator_input(stft_gt)
             with torch.amp.autocast("cuda", enabled=(device.type == "cuda")):
                 fake_real, fake_imag = G(in_real, in_imag)
-                v_total, v_mse, v_coh = g_loss_fn(fake_real, fake_imag, gt_real, gt_imag)
+                v_total, v_mse, v_coh = g_loss_fn(
+                    fake_real, fake_imag, gt_real, gt_imag
+                )
             val_total += v_total.item()
             val_mse += v_mse.item()
             val_coh += v_coh.item()
     G.train()
-    print(f"Validazione ({n} batch): Totale {val_total / max(1, n):.4f}, MSE {val_mse / max(1, n):.4f}, Coerenza {val_coh / max(1, n):.4f}")
+    print(
+        f"Validazione ({n} batch): Totale {val_total / max(1, n):.4f}, MSE {val_mse / max(1, n):.4f}, Coerenza {val_coh / max(1, n):.4f}"
+    )
 
 
 def _save_checkpoint(epoch, G, D, opt_g, opt_d, scaler_g, history, final=False):
     name = f"gan_checkpoint_{'final' if final else f'epoch_{epoch}'}.pt"
     path = os.path.join(config.CHECKPOINT_DIR, name)
-    ckpt = {"epoch": epoch, "G_state": G.state_dict(), "opt_g": opt_g.state_dict(), "history": history}
+    ckpt = {
+        "epoch": epoch,
+        "G_state": G.state_dict(),
+        "opt_g": opt_g.state_dict(),
+        "history": history,
+    }
     if D is not None:
         ckpt["D_state"] = D.state_dict()
         ckpt["opt_d"] = opt_d.state_dict()

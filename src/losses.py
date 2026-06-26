@@ -1,12 +1,4 @@
-"""Funzioni di loss per la GAN.
-
-Versione canonica (CORRETTA) che sostituisce le definizioni duplicate sparse nel
-notebook (celle 27, 28 e dentro la cella 34). Correzioni principali:
-  * ``CombinedLoss`` restituisce (totale, mse, coerenza) e NON stampa nulla;
-  * la **feature matching loss** è un obiettivo del GENERATORE: qui è esposta come
-    funzione usata dal training di G, e NON è più sommata alla loss del
-    discriminatore (com'era erroneamente nell'originale);
-  * ``DiscriminatorLoss`` calcola solo loss avversaria (+ gradient penalty opz.).
+"""Funzioni di loss per la GAN
 """
 
 import torch
@@ -48,11 +40,7 @@ class CombinedLoss(nn.Module):
 
 
 def feature_matching_loss(feats_real, feats_fake):
-    """Feature matching tra feature reali (detached) e fake del discriminatore.
-
-    ``feats_*`` sono liste per-scala, ognuna lista di tensori per-layer
-    (formato restituito da ``MultiScaleDiscriminator``). È un obiettivo del
-    GENERATORE: le feature reali vanno passate già senza gradiente.
+    """Feature matching tra feature reali (detached) e quelle del discriminatore
     """
     loss = 0.0
     for scale_real, scale_fake in zip(feats_real, feats_fake):

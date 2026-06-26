@@ -1,1 +1,1 @@
-"""Pacchetto sorgente della tesi: GAN per super-resolution audio (STFT)."""
+"""Pacchetto sorgente della tesi: GAN per audio super-resolution."""
