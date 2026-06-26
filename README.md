@@ -10,10 +10,10 @@ stima delle componenti spettrali mancanti, migliorando la qualità percepita
 dell'audio. Il lavoro si colloca nell'ambito dell'Audio Super-Resolution e opera
 nel dominio della Short-Time Fourier Transform.
 
-## Inquadramento
+## Informazioni
 
 Tesi di Laurea Triennale in Ingegneria Informatica, Dipartimento di Ingegneria
-Informatica, Modellistica, Elettronica e Sistemistica.
+Informatica, Modellistica, Elettronica e Sistemistica dell'Università della Calabria.
 
 - Candidato: Christian Bruni (matricola 240008)
 - Relatore: Prof. Luigi Palopoli
@@ -133,10 +133,3 @@ I valori predefiniti sono definiti in `src/train_gan.py`.
 Le dipendenze sono elencate in `requirements.txt`: PyTorch, NumPy, SciPy, librosa,
 matplotlib e tqdm. L'addestramento completo richiede una GPU e il dataset FMA, ed è
 stato eseguito su Kaggle con due GPU Nvidia Tesla T4.
-
-## Revisione del codice
-
-Il codice originale era contenuto in un unico notebook e presentava errori e
-ripetizioni. È stato riorganizzato in moduli e i difetti sono stati corretti, fatta
-eccezione per la rete generatrice, lasciata invariata. Il dettaglio delle correzioni
-e dei problemi segnalati è riportato in `REVIEW.md`.
