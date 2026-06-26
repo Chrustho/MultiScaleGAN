@@ -57,7 +57,7 @@ notebooks/
   02_train_gan.ipynb       Costruzione dei modelli e avvio dell'addestramento
 REVIEW.md            Relazione sulla revisione del codice
 requirements.txt     Dipendenze Python
-tesi-bozza-finale.pdf  Testo della tesi
+tesi.pdf  Testo della tesi
 ```
 
 ## Dataset
